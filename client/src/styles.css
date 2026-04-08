@@ -266,19 +266,27 @@ input::placeholder {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: clamp(180px, 24vw, 280px);
+
+  /* 👉 WICHTIG: prozentuale Größe statt vw */
+  width: 30%;
   aspect-ratio: 1 / 1;
+
+  min-width: 160px;
+  max-width: 300px;
+
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(7, 16, 30, 0.92), rgba(5, 12, 22, 0.96));
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: radial-gradient(circle, rgba(7,16,30,0.92), rgba(5,12,22,0.96));
+  border: 1px solid rgba(255,255,255,0.08);
+
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  box-shadow: inset 0 0 30px rgba(255, 255, 255, 0.02);
+
+  box-shadow: inset 0 0 30px rgba(255,255,255,0.02);
   z-index: 3;
-  padding: 14px;
+  padding: 12px;
 }
 
 .activePlayerTitle {
