@@ -1,17 +1,22 @@
 export function getSeatPosition(index, total) {
+  // Start oben, dann im Uhrzeigersinn
   const angle = (-90 + (360 / total) * index) * (Math.PI / 180);
 
+  // Radius je nach Spieleranzahl etwas anpassen,
+  // damit die Boxen weder zu nah an der Mitte
+  // noch zu weit am Rand sitzen
   const radiusByCount = {
-    2: 34,
-    3: 36,
-    4: 38,
-    5: 39,
-    6: 40,
-    7: 41,
-    8: 42,
+    1: 0,
+    2: 39,
+    3: 40,
+    4: 40,
+    5: 41,
+    6: 42,
+    7: 42,
+    8: 43,
   };
 
-  const radius = radiusByCount[total] || 40;
+  const radius = radiusByCount[total] ?? 41;
 
   const x = 50 + Math.cos(angle) * radius;
   const y = 50 + Math.sin(angle) * radius;
@@ -37,6 +42,7 @@ export function getNumberCardClass(value) {
     11: "num11",
     12: "num12",
   };
+
   return map[value] || "numDefault";
 }
 
@@ -48,13 +54,24 @@ export function getCardClass(card) {
   }
 
   if (card.kind === "action") {
-    if (card.action === "FREEZE") return "cardFace actionCard freezeCard";
-    if (card.action === "DRAW_3") return "cardFace actionCard draw3Card";
-    if (card.action === "SECOND_CHANCE") return "cardFace actionCard secondChanceCard";
+    if (card.action === "FREEZE") {
+      return "cardFace actionCard freezeCard";
+    }
+
+    if (card.action === "DRAW_3") {
+      return "cardFace actionCard draw3Card";
+    }
+
+    if (card.action === "SECOND_CHANCE") {
+      return "cardFace actionCard secondChanceCard";
+    }
   }
 
   if (card.kind === "bonus") {
-    if (card.bonus === "MULTIPLY_2") return "cardFace bonusCard mult2Card";
+    if (card.bonus === "MULTIPLY_2") {
+      return "cardFace bonusCard mult2Card";
+    }
+
     return "cardFace bonusCard plusCard";
   }
 
