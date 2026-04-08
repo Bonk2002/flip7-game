@@ -1028,9 +1028,10 @@ io.on("connection", (socket) => {
 const clientDistPath = path.join(__dirname, "../client/dist");
 app.use(express.static(clientDistPath));
 
-app.get("/*", (req, res) => {
+app.use((req, res) => {
   res.sendFile(path.join(clientDistPath, "index.html"));
 });
+
 server.listen(PORT, () => {
-  console.log(`Server läuft auf http://localhost:${PORT}`);
+  console.log(`Server läuft auf Port ${PORT}`);
 });
