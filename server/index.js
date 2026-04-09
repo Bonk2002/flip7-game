@@ -20,6 +20,10 @@ const TARGET_SCORE = 200;
 const ROUND_RESTART_DELAY = 4500;
 const MAX_PLAYERS = 8;
 
+const REVEAL_MS = 850;
+const FLY_MS = 900;
+const BETWEEN_DEALS_MS = 350;
+
 const lobbies = {};
 
 let globalCardId = 1;
@@ -187,7 +191,6 @@ function calculateRoundScore(player) {
   }
 
   let total = numberSum + plus;
-
   if (multiply2) total *= 2;
   if (player.completedSevenCards) total += 15;
 
@@ -224,6 +227,21 @@ function discardCard(lobby, card) {
   }
 }
 
+function getValidFreezeTargets(lobby) {
+  return lobby.players.filter((p) => !p.busted && !p.stopped);
+}
+
+function getValidDraw3Targets(lobby) {
+  return lobby.players.filter((p) => !p.busted && !p.stopped);
+}
+
+function queueFollowUpAction(lobby, playerId, actionType) {
+  lobby.followUpActions.push({
+    playerId,
+    actionType,
+  });
+}
+
 function getPublicLobbyState(code) {
   const lobby = lobbies[code];
   if (!lobby) return null;
@@ -251,6 +269,7 @@ function getPublicLobbyState(code) {
           selections: lobby.pendingAction.selections || [],
         }
       : null,
+    animationState: lobby.animationState || null,
     players: lobby.players.map((player) => ({
       id: player.id,
       name: player.name,
@@ -291,6 +310,10 @@ function initializeRound(lobby) {
   lobby.deck = createDeck();
   lobby.discard = [];
   lobby.pendingAction = null;
+  lobby.followUpActions = [];
+  lobby.animationState = null;
+  lobby.processing = false;
+  lobby.turnShouldAdvanceAfterResolution = false;
   lobby.winnerId = null;
   lobby.winnerName = null;
 
@@ -315,6 +338,10 @@ function initializeRound(lobby) {
 function endRound(lobby) {
   lobby.phase = "round_end";
   lobby.pendingAction = null;
+  lobby.followUpActions = [];
+  lobby.animationState = null;
+  lobby.processing = false;
+  lobby.turnShouldAdvanceAfterResolution = false;
 
   lobby.players.forEach((player) => {
     if (!player.busted) {
@@ -378,6 +405,8 @@ function nextTurn(lobby) {
 
 function maybeCompleteSevenCards(lobby, player) {
   if (player.completedSevenCards) return;
+
+  // Nur ZAHLENKARTEN zählen für +15 / 7 Karten
   if (getNumberCards(player).length < 7) return;
 
   player.completedSevenCards = true;
@@ -515,8 +544,8 @@ function startPendingFreeze(lobby, player, card) {
     player.id
   );
 
-  // Alleine -> auf sich selbst
-  if (lobby.players.length === 1) {
+  const validTargets = getValidFreezeTargets(lobby);
+  if (validTargets.length === 1 && validTargets[0].id === player.id) {
     completeFreezeSelection(lobby, player.id);
   }
 }
@@ -535,13 +564,15 @@ function startPendingDraw3(lobby, player, card) {
   setLobbyEvent(
     lobby,
     "draw3_select",
-    `${player.name} verteilt 3 Karten.`,
+    `${player.name} verteilt 3 Karten. Wähle Ziel 1, 2 und 3 nacheinander.`,
     player.id
   );
 }
 
-function resolveCard(lobby, player, card) {
+function resolveCardImmediate(lobby, player, card, options = {}) {
   if (lobby.phase !== "round") return;
+
+  const { deferPlayableAction = false } = options;
 
   if (card.kind === "number") {
     resolveNumberCard(lobby, player, card);
@@ -560,19 +591,149 @@ function resolveCard(lobby, player, card) {
     }
 
     if (card.action === "FREEZE") {
-      startPendingFreeze(lobby, player, card);
+      if (deferPlayableAction) {
+        discardCard(lobby, card);
+        queueFollowUpAction(lobby, player.id, "FREEZE");
+        setLobbyEvent(
+          lobby,
+          "freeze_queued",
+          `${player.name} erhält Freeze. Er wird direkt nach der aktuellen Zieh-3-Kette ausgespielt.`,
+          player.id
+        );
+      } else {
+        startPendingFreeze(lobby, player, card);
+      }
       return;
     }
 
     if (card.action === "DRAW_3") {
-      startPendingDraw3(lobby, player, card);
-      return;
+      if (deferPlayableAction) {
+        discardCard(lobby, card);
+        queueFollowUpAction(lobby, player.id, "DRAW_3");
+        setLobbyEvent(
+          lobby,
+          "draw3_queued",
+          `${player.name} erhält Zieh 3. Es wird direkt nach der aktuellen Zieh-3-Kette ausgespielt.`,
+          player.id
+        );
+      } else {
+        startPendingDraw3(lobby, player, card);
+      }
     }
   }
 }
 
-function performDrawForPlayer(lobby, player) {
-  if (lobby.phase !== "round") return;
+function setAnimationState(lobby, animationState) {
+  lobby.animationState = animationState;
+  emitLobbyUpdate(lobby.code);
+}
+
+function clearAnimationState(lobby) {
+  lobby.animationState = null;
+  emitLobbyUpdate(lobby.code);
+}
+
+function animateRevealToPlayer(lobby, { sourcePlayerId = null, targetPlayerId, card, mode = "draw" }, onDone) {
+  if (!lobbies[lobby.code]) return;
+
+  setAnimationState(lobby, {
+    id: nextEventId(),
+    mode,
+    sourcePlayerId,
+    targetPlayerId,
+    card,
+  });
+
+  setTimeout(() => {
+    if (!lobbies[lobby.code]) return;
+    clearAnimationState(lobby);
+
+    setTimeout(() => {
+      if (!lobbies[lobby.code]) return;
+      onDone?.();
+    }, 80);
+  }, REVEAL_MS + FLY_MS);
+}
+
+function finishResolutionAndAdvanceTurnIfNeeded(lobby) {
+  if (!lobbies[lobby.code]) return;
+  if (lobby.phase !== "round") {
+    emitLobbyUpdate(lobby.code);
+    return;
+  }
+
+  if (lobby.pendingAction) {
+    emitLobbyUpdate(lobby.code);
+    return;
+  }
+
+  if (lobby.followUpActions.length > 0) {
+    startNextFollowUpAction(lobby);
+    emitLobbyUpdate(lobby.code);
+    return;
+  }
+
+  if (lobby.turnShouldAdvanceAfterResolution) {
+    lobby.turnShouldAdvanceAfterResolution = false;
+    nextTurn(lobby);
+  }
+
+  emitLobbyUpdate(lobby.code);
+}
+
+function performAnimatedDrawForCurrentPlayer(lobby, player) {
+  const card = drawFromDeck(lobby);
+  if (!card) {
+    endRound(lobby);
+    return;
+  }
+
+  lobby.processing = true;
+
+  setPlayerEffect(player, "draw");
+  setLobbyEvent(lobby, "draw", `${player.name} zieht eine Karte.`, player.id);
+
+  animateRevealToPlayer(
+    lobby,
+    {
+      sourcePlayerId: null,
+      targetPlayerId: player.id,
+      card,
+      mode: "draw",
+    },
+    () => {
+      if (!lobbies[lobby.code]) return;
+
+      resolveCardImmediate(lobby, player, card, { deferPlayableAction: false });
+      lobby.processing = false;
+      finishResolutionAndAdvanceTurnIfNeeded(lobby);
+    }
+  );
+}
+
+function processDraw3Distribution(lobby, actionPlayerId, selections, index = 0) {
+  if (!lobbies[lobby.code]) return;
+
+  if (lobby.phase !== "round") {
+    emitLobbyUpdate(lobby.code);
+    return;
+  }
+
+  if (index >= selections.length) {
+    lobby.pendingAction = null;
+    lobby.processing = false;
+    finishResolutionAndAdvanceTurnIfNeeded(lobby);
+    return;
+  }
+
+  const targetId = selections[index];
+  const sourcePlayer = lobby.players.find((p) => p.id === actionPlayerId);
+  const targetPlayer = lobby.players.find((p) => p.id === targetId);
+
+  if (!sourcePlayer || !targetPlayer || targetPlayer.busted || targetPlayer.stopped) {
+    processDraw3Distribution(lobby, actionPlayerId, selections, index + 1);
+    return;
+  }
 
   const card = drawFromDeck(lobby);
   if (!card) {
@@ -580,10 +741,94 @@ function performDrawForPlayer(lobby, player) {
     return;
   }
 
-  setPlayerEffect(player, "draw");
-  setLobbyEvent(lobby, "draw", `${player.name} zieht eine Karte.`, player.id);
+  lobby.processing = true;
+  setLobbyEvent(
+    lobby,
+    "draw3_resolve",
+    `${sourcePlayer.name} verteilt Karte ${index + 1} an ${targetPlayer.name}.`,
+    sourcePlayer.id,
+    {
+      sourcePlayerId: sourcePlayer.id,
+      targetPlayerIds: [targetPlayer.id],
+      step: index + 1,
+    }
+  );
 
-  resolveCard(lobby, player, card);
+  animateRevealToPlayer(
+    lobby,
+    {
+      sourcePlayerId: sourcePlayer.id,
+      targetPlayerId: targetPlayer.id,
+      card,
+      mode: "deal",
+    },
+    () => {
+      if (!lobbies[lobby.code]) return;
+
+      resolveCardImmediate(lobby, targetPlayer, card, { deferPlayableAction: true });
+
+      setTimeout(() => {
+        if (!lobbies[lobby.code]) return;
+        processDraw3Distribution(lobby, actionPlayerId, selections, index + 1);
+      }, BETWEEN_DEALS_MS);
+    }
+  );
+}
+
+function startNextFollowUpAction(lobby) {
+  if (!lobby.followUpActions.length) return false;
+  if (lobby.pendingAction) return false;
+
+  const next = lobby.followUpActions.shift();
+  const player = lobby.players.find((p) => p.id === next.playerId);
+
+  if (!player || player.busted || player.stopped) {
+    return startNextFollowUpAction(lobby);
+  }
+
+  if (next.actionType === "FREEZE") {
+    lobby.pendingAction = {
+      type: "FREEZE",
+      playerId: player.id,
+      selections: [],
+    };
+
+    setPlayerEffect(player, "action");
+    setLobbyEvent(
+      lobby,
+      "freeze_select",
+      `${player.name} spielt jetzt sein erhaltenes Freeze aus.`,
+      player.id
+    );
+
+    const validTargets = getValidFreezeTargets(lobby);
+    if (validTargets.length === 1 && validTargets[0].id === player.id) {
+      completeFreezeSelection(lobby, player.id);
+    }
+
+    return true;
+  }
+
+  if (next.actionType === "DRAW_3") {
+    lobby.pendingAction = {
+      type: "DRAW_3",
+      playerId: player.id,
+      remaining: 3,
+      selections: [],
+    };
+
+    setPlayerEffect(player, "action");
+    setLobbyEvent(
+      lobby,
+      "draw3_select",
+      `${player.name} spielt jetzt sein erhaltenes Zieh 3 aus.`,
+      player.id
+    );
+
+    return true;
+  }
+
+  return false;
 }
 
 function completeFreezeSelection(lobby, targetPlayerId) {
@@ -597,66 +842,21 @@ function completeFreezeSelection(lobby, targetPlayerId) {
 
   eliminateByFreeze(lobby, target, sourcePlayer.name, sourcePlayer.id);
   lobby.pendingAction = null;
-
-  const current = getCurrentPlayer(lobby);
-  if (current && current.stopped) {
-    nextTurn(lobby);
-  }
-
+  finishResolutionAndAdvanceTurnIfNeeded(lobby);
   return true;
 }
 
-function completeDraw3Distribution(lobby) {
+function completeDraw3SelectionAndStart(lobby) {
   const action = lobby.pendingAction;
   if (!action || action.type !== "DRAW_3") return false;
 
   const sourcePlayer = lobby.players.find((p) => p.id === action.playerId);
   if (!sourcePlayer) return false;
 
-  const targetsResolved = [];
+  const selections = [...action.selections];
+  lobby.processing = true;
 
-  for (const targetId of action.selections) {
-    if (lobby.phase !== "round") break;
-
-    const target = lobby.players.find((p) => p.id === targetId);
-    if (!target || target.busted || target.stopped) continue;
-
-    targetsResolved.push(target.id);
-
-    const card = drawFromDeck(lobby);
-    if (!card) {
-      endRound(lobby);
-      return true;
-    }
-
-    resolveCard(lobby, target, card);
-
-    if (lobby.phase !== "round" && lobby.phase !== "game_over") {
-      lobby.pendingAction = null;
-      return true;
-    }
-  }
-
-  lobby.pendingAction = null;
-
-  setLobbyEvent(
-    lobby,
-    "draw3_resolve",
-    `${sourcePlayer.name} hat 3 Karten verteilt.`,
-    sourcePlayer.id,
-    {
-      sourcePlayerId: sourcePlayer.id,
-      targetPlayerIds: targetsResolved,
-    }
-  );
-
-  const current = getCurrentPlayer(lobby);
-  if (current && current.stopped) {
-    nextTurn(lobby);
-  } else {
-    nextTurn(lobby);
-  }
-
+  processDraw3Distribution(lobby, sourcePlayer.id, selections, 0);
   return true;
 }
 
@@ -689,6 +889,10 @@ io.on("connection", (socket) => {
         winnerId: null,
         winnerName: null,
         pendingAction: null,
+        followUpActions: [],
+        animationState: null,
+        processing: false,
+        turnShouldAdvanceAfterResolution: false,
       };
 
       socket.join(code);
@@ -781,8 +985,8 @@ io.on("connection", (socket) => {
         return;
       }
 
-      if (lobby.pendingAction) {
-        socket.emit("error_message", "Beende zuerst die laufende Aktion.");
+      if (lobby.pendingAction || lobby.processing || lobby.animationState) {
+        socket.emit("error_message", "Warte, bis die aktuelle Aktion abgeschlossen ist.");
         return;
       }
 
@@ -798,12 +1002,8 @@ io.on("connection", (socket) => {
         return;
       }
 
-      performDrawForPlayer(lobby, currentPlayer);
-
-      if (lobby.phase === "round" && !lobby.pendingAction) {
-        nextTurn(lobby);
-      }
-
+      lobby.turnShouldAdvanceAfterResolution = true;
+      performAnimatedDrawForCurrentPlayer(lobby, currentPlayer);
       emitLobbyUpdate(code);
     } catch (error) {
       console.error("Fehler bei draw_card:", error);
@@ -826,8 +1026,8 @@ io.on("connection", (socket) => {
         return;
       }
 
-      if (lobby.pendingAction) {
-        socket.emit("error_message", "Beende zuerst die laufende Aktion.");
+      if (lobby.pendingAction || lobby.processing || lobby.animationState) {
+        socket.emit("error_message", "Warte, bis die aktuelle Aktion abgeschlossen ist.");
         return;
       }
 
@@ -869,7 +1069,7 @@ io.on("connection", (socket) => {
       }
 
       if (action.playerId !== socket.id) {
-        socket.emit("error_message", "Nur der aktive Spieler darf das Ziel wählen.");
+        socket.emit("error_message", "Nur der betreffende Spieler darf das Ziel wählen.");
         return;
       }
 
@@ -905,7 +1105,7 @@ io.on("connection", (socket) => {
       }
 
       if (action.playerId !== socket.id) {
-        socket.emit("error_message", "Nur der aktive Spieler darf verteilen.");
+        socket.emit("error_message", "Nur der betreffende Spieler darf verteilen.");
         return;
       }
 
@@ -924,12 +1124,12 @@ io.on("connection", (socket) => {
       action.remaining = Math.max(0, 3 - action.selections.length);
 
       if (action.remaining <= 0) {
-        completeDraw3Distribution(lobby);
+        completeDraw3SelectionAndStart(lobby);
       } else {
         setLobbyEvent(
           lobby,
           "draw3_select",
-          `${lobby.players.find((p) => p.id === action.playerId)?.name || "Spieler"} verteilt weiter: noch ${action.remaining}.`,
+          `${lobby.players.find((p) => p.id === action.playerId)?.name || "Spieler"} wählt Ziel ${action.selections.length + 1} von 3.`,
           action.playerId
         );
       }
@@ -1008,6 +1208,8 @@ io.on("connection", (socket) => {
         lobby.pendingAction = null;
       }
 
+      lobby.followUpActions = lobby.followUpActions.filter((a) => a.playerId !== socket.id);
+
       if (lobby.phase === "round") {
         const activePlayers = getActivePlayers(lobby);
         if (!activePlayers.length) {
@@ -1023,8 +1225,7 @@ io.on("connection", (socket) => {
   });
 });
 
-
-// React/Vite Build in Produktion ausliefern
+// Produktion: React Build ausliefern
 const clientDistPath = path.join(__dirname, "../client/dist");
 app.use(express.static(clientDistPath));
 
