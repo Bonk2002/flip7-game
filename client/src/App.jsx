@@ -105,8 +105,12 @@ function PlayerSeat({ player, index, total, isCurrentPlayer }) {
   );
 }
 
-function PendingOverlay({ lobby, isMyTurn }) {
-  if (!lobby?.pendingAction || !isMyTurn) return null;
+function PendingOverlay({ lobby }) {
+  const isActionOwner =
+    !!lobby?.pendingAction && lobby.pendingAction.playerId === socket.id;
+
+  if (!lobby?.pendingAction || !isActionOwner) return null;
+  if (lobby.processing || lobby.animationState) return null;
 
   const action = lobby.pendingAction;
 
@@ -305,6 +309,8 @@ export default function App() {
   }, [lobby]);
 
   const isMyTurn = currentPlayer?.id === socket.id;
+  const isActionOwner =
+    !!lobby?.pendingAction && lobby.pendingAction.playerId === socket.id;
 
   const inGame = useMemo(() => {
     if (!lobby) return false;
@@ -315,10 +321,8 @@ export default function App() {
     );
   }, [lobby]);
 
-  const hasPendingActionForMe =
-    !!lobby?.pendingAction && lobby.pendingAction.playerId === socket.id;
-
-  const busyAnimation = !!lobby?.animationState;
+  const gameBusy =
+    !!lobby?.pendingAction || !!lobby?.animationState || !!lobby?.processing;
 
   return (
     <div className="page">
@@ -432,18 +436,12 @@ export default function App() {
                     "deckButton",
                     isMyTurn &&
                     lobby.phase === "round" &&
-                    !hasPendingActionForMe &&
-                    !busyAnimation
+                    !gameBusy
                       ? "deckClickable"
                       : "",
                   ].join(" ")}
                   onClick={drawCard}
-                  disabled={
-                    !isMyTurn ||
-                    lobby.phase !== "round" ||
-                    hasPendingActionForMe ||
-                    busyAnimation
-                  }
+                  disabled={!isMyTurn || lobby.phase !== "round" || gameBusy}
                   title={
                     isMyTurn && lobby.phase === "round"
                       ? "Karte ziehen"
@@ -456,16 +454,16 @@ export default function App() {
                   <div className="deckCount">{lobby.deckCount}</div>
                 </button>
 
-                {lobby.phase === "round" &&
-                  !hasPendingActionForMe &&
-                  !busyAnimation &&
-                  !isMyTurn &&
-                  currentPlayer && (
-                    <div className="waitLabel">Warte auf {currentPlayer.name}</div>
-                  )}
+                {lobby.phase === "round" && !gameBusy && !isMyTurn && currentPlayer && (
+                  <div className="waitLabel">Warte auf {currentPlayer.name}</div>
+                )}
 
-                {busyAnimation && (
-                  <div className="waitLabel">Karte wird aufgedeckt ...</div>
+                {lobby.pendingAction && isActionOwner && !lobby.processing && !lobby.animationState && (
+                  <div className="waitLabel">Du führst gerade eine Aktionskarte aus</div>
+                )}
+
+                {gameBusy && !isActionOwner && (
+                  <div className="waitLabel">Aktion wird gerade ausgeführt ...</div>
                 )}
 
                 {lobby.phase === "round_end" && (
@@ -486,7 +484,7 @@ export default function App() {
                 )}
               </div>
 
-              <PendingOverlay lobby={lobby} isMyTurn={isMyTurn} />
+              <PendingOverlay lobby={lobby} />
               <AnimatedCardLayer lobby={lobby} />
             </div>
           </div>
@@ -496,7 +494,7 @@ export default function App() {
               <button
                 className="stopBtn"
                 onClick={stopTurn}
-                disabled={!isMyTurn || hasPendingActionForMe || busyAnimation}
+                disabled={!isMyTurn || gameBusy}
               >
                 STOP
               </button>
