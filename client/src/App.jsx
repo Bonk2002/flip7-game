@@ -140,9 +140,9 @@ function PendingOverlay({ lobby, isMyTurn }) {
     return (
       <div className="overlayPanel">
         <h3>Zieh 3 verteilen</h3>
-        <p>Noch zu verteilen: {action.remaining}</p>
+        <p>Noch zu wählen: {action.remaining}</p>
         <p className="overlaySmall">
-          Frei verteilbar an dich oder andere aktive Spieler.
+          Wähle Ziel 1, Ziel 2 und Ziel 3 nacheinander.
         </p>
 
         <div className="selectedTargets">
@@ -150,7 +150,7 @@ function PendingOverlay({ lobby, isMyTurn }) {
             const player = lobby.players.find((p) => p.id === id);
             return (
               <span className="targetChip" key={`${id}-${index}`}>
-                {player ? player.name : "?"}
+                {index + 1}. {player ? player.name : "?"}
               </span>
             );
           })}
@@ -180,21 +180,44 @@ function PendingOverlay({ lobby, isMyTurn }) {
   return null;
 }
 
-function Draw3FlightLayer({ lobby }) {
-  const event = lobby?.lastEvent;
-  if (!event || event.type !== "draw3_resolve" || !event.meta?.targetPlayerIds?.length) {
-    return null;
-  }
+function AnimatedCardLayer({ lobby }) {
+  const animation = lobby?.animationState;
+  if (!animation || !animation.card) return null;
+
+  const targetIndex = lobby.players.findIndex((p) => p.id === animation.targetPlayerId);
+  if (targetIndex === -1) return null;
+
+  const targetPos = getSeatPosition(targetIndex, lobby.players.length);
 
   return (
-    <div className="flightLayer">
-      {event.meta.targetPlayerIds.map((targetId, index) => (
+    <div className="animationLayer">
+      <div className="revealSpot">
         <div
-          key={`${event.id}-${targetId}-${index}`}
-          className="flyingCard"
-          style={{ animationDelay: `${index * 0.35}s` }}
-        />
-      ))}
+          className={`${getCardClass(animation.card)} animatedRevealCard`}
+          style={{
+            "--target-left": targetPos.left,
+            "--target-top": targetPos.top,
+          }}
+        >
+          <div className="cardLabel">{animation.card.label}</div>
+
+          {animation.card.kind === "action" && animation.card.action === "FREEZE" && (
+            <div className="cardIcon">❄</div>
+          )}
+
+          {animation.card.kind === "action" && animation.card.action === "DRAW_3" && (
+            <div className="cardIcon">➜➜➜</div>
+          )}
+
+          {animation.card.kind === "action" && animation.card.action === "SECOND_CHANCE" && (
+            <div className="cardIcon">❤</div>
+          )}
+
+          {animation.card.kind === "bonus" && animation.card.bonus === "MULTIPLY_2" && (
+            <div className="cardIcon">✦</div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -230,6 +253,7 @@ export default function App() {
       setError("Bitte gib einen Namen ein.");
       return;
     }
+
     socket.emit("create_lobby", { playerName: cleanName });
   }
 
@@ -293,6 +317,8 @@ export default function App() {
 
   const hasPendingActionForMe =
     !!lobby?.pendingAction && lobby.pendingAction.playerId === socket.id;
+
+  const busyAnimation = !!lobby?.animationState;
 
   return (
     <div className="page">
@@ -404,12 +430,20 @@ export default function App() {
                 <button
                   className={[
                     "deckButton",
-                    isMyTurn && lobby.phase === "round" && !hasPendingActionForMe
+                    isMyTurn &&
+                    lobby.phase === "round" &&
+                    !hasPendingActionForMe &&
+                    !busyAnimation
                       ? "deckClickable"
                       : "",
                   ].join(" ")}
                   onClick={drawCard}
-                  disabled={!isMyTurn || lobby.phase !== "round" || hasPendingActionForMe}
+                  disabled={
+                    !isMyTurn ||
+                    lobby.phase !== "round" ||
+                    hasPendingActionForMe ||
+                    busyAnimation
+                  }
                   title={
                     isMyTurn && lobby.phase === "round"
                       ? "Karte ziehen"
@@ -422,8 +456,16 @@ export default function App() {
                   <div className="deckCount">{lobby.deckCount}</div>
                 </button>
 
-                {lobby.phase === "round" && !hasPendingActionForMe && !isMyTurn && currentPlayer && (
-                  <div className="waitLabel">Warte auf {currentPlayer.name}</div>
+                {lobby.phase === "round" &&
+                  !hasPendingActionForMe &&
+                  !busyAnimation &&
+                  !isMyTurn &&
+                  currentPlayer && (
+                    <div className="waitLabel">Warte auf {currentPlayer.name}</div>
+                  )}
+
+                {busyAnimation && (
+                  <div className="waitLabel">Karte wird aufgedeckt ...</div>
                 )}
 
                 {lobby.phase === "round_end" && (
@@ -445,7 +487,7 @@ export default function App() {
               </div>
 
               <PendingOverlay lobby={lobby} isMyTurn={isMyTurn} />
-              <Draw3FlightLayer lobby={lobby} />
+              <AnimatedCardLayer lobby={lobby} />
             </div>
           </div>
 
@@ -454,7 +496,7 @@ export default function App() {
               <button
                 className="stopBtn"
                 onClick={stopTurn}
-                disabled={!isMyTurn || hasPendingActionForMe}
+                disabled={!isMyTurn || hasPendingActionForMe || busyAnimation}
               >
                 STOP
               </button>
