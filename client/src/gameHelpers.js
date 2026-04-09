@@ -1,10 +1,6 @@
 export function getSeatPosition(index, total) {
-  // Start oben, dann im Uhrzeigersinn
   const angle = (-90 + (360 / total) * index) * (Math.PI / 180);
 
-  // Radius je nach Spieleranzahl etwas anpassen,
-  // damit die Boxen weder zu nah an der Mitte
-  // noch zu weit am Rand sitzen
   const radiusByCount = {
     1: 0,
     2: 39,
