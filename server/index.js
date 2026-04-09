@@ -91,19 +91,16 @@ function shuffle(array) {
 function createDeck() {
   const deck = [];
 
-  // 1x die 1, 2x die 2, ... 12x die 12
   for (let value = 1; value <= 12; value++) {
     for (let count = 0; count < value; count++) {
       deck.push(createNumberCard(value));
     }
   }
 
-  // Aktionen
   for (let i = 0; i < 3; i++) deck.push(createActionCard("SECOND_CHANCE"));
   for (let i = 0; i < 3; i++) deck.push(createActionCard("DRAW_3"));
   for (let i = 0; i < 3; i++) deck.push(createActionCard("FREEZE"));
 
-  // Bonuskarten
   deck.push(createBonusCard("PLUS_2"));
   deck.push(createBonusCard("PLUS_4"));
   deck.push(createBonusCard("PLUS_6"));
@@ -231,10 +228,6 @@ function getValidFreezeTargets(lobby) {
   return lobby.players.filter((p) => !p.busted && !p.stopped);
 }
 
-function getValidDraw3Targets(lobby) {
-  return lobby.players.filter((p) => !p.busted && !p.stopped);
-}
-
 function queueFollowUpAction(lobby, playerId, actionType) {
   lobby.followUpActions.push({
     playerId,
@@ -261,6 +254,7 @@ function getPublicLobbyState(code) {
     winnerId: lobby.winnerId || null,
     winnerName: lobby.winnerName || null,
     lastEvent: lobby.lastEvent || null,
+    processing: !!lobby.processing,
     pendingAction: lobby.pendingAction
       ? {
           type: lobby.pendingAction.type,
@@ -405,8 +399,6 @@ function nextTurn(lobby) {
 
 function maybeCompleteSevenCards(lobby, player) {
   if (player.completedSevenCards) return;
-
-  // Nur ZAHLENKARTEN zählen für +15 / 7 Karten
   if (getNumberCards(player).length < 7) return;
 
   player.completedSevenCards = true;
@@ -564,7 +556,7 @@ function startPendingDraw3(lobby, player, card) {
   setLobbyEvent(
     lobby,
     "draw3_select",
-    `${player.name} verteilt 3 Karten. Wähle Ziel 1, 2 und 3 nacheinander.`,
+    `${player.name} verteilt 3 Karten. Wähle Ziel 1, Ziel 2 und Ziel 3 nacheinander.`,
     player.id
   );
 }
@@ -597,7 +589,7 @@ function resolveCardImmediate(lobby, player, card, options = {}) {
         setLobbyEvent(
           lobby,
           "freeze_queued",
-          `${player.name} erhält Freeze. Er wird direkt nach der aktuellen Zieh-3-Kette ausgespielt.`,
+          `${player.name} erhält Freeze. Es wird direkt nach der aktuellen Zieh-3-Kette ausgespielt.`,
           player.id
         );
       } else {
@@ -657,6 +649,7 @@ function animateRevealToPlayer(lobby, { sourcePlayerId = null, targetPlayerId, c
 
 function finishResolutionAndAdvanceTurnIfNeeded(lobby) {
   if (!lobbies[lobby.code]) return;
+
   if (lobby.phase !== "round") {
     emitLobbyUpdate(lobby.code);
     return;
@@ -720,7 +713,6 @@ function processDraw3Distribution(lobby, actionPlayerId, selections, index = 0) 
   }
 
   if (index >= selections.length) {
-    lobby.pendingAction = null;
     lobby.processing = false;
     finishResolutionAndAdvanceTurnIfNeeded(lobby);
     return;
@@ -854,9 +846,31 @@ function completeDraw3SelectionAndStart(lobby) {
   if (!sourcePlayer) return false;
 
   const selections = [...action.selections];
+
+  // WICHTIGER FIX:
+  // Das Auswahlmenü wird sofort geschlossen, bevor die Verteilung startet.
+  lobby.pendingAction = null;
   lobby.processing = true;
 
-  processDraw3Distribution(lobby, sourcePlayer.id, selections, 0);
+  setLobbyEvent(
+    lobby,
+    "draw3_resolve",
+    `${sourcePlayer.name} beginnt jetzt die Verteilung der 3 Karten.`,
+    sourcePlayer.id,
+    {
+      sourcePlayerId: sourcePlayer.id,
+      targetPlayerIds: selections,
+      step: 0,
+    }
+  );
+
+  emitLobbyUpdate(lobby.code);
+
+  setTimeout(() => {
+    if (!lobbies[lobby.code]) return;
+    processDraw3Distribution(lobby, sourcePlayer.id, selections, 0);
+  }, 150);
+
   return true;
 }
 
@@ -1225,7 +1239,6 @@ io.on("connection", (socket) => {
   });
 });
 
-// Produktion: React Build ausliefern
 const clientDistPath = path.join(__dirname, "../client/dist");
 app.use(express.static(clientDistPath));
 
